@@ -1,3 +1,9 @@
 .vercel
 node_modules
 .DS_Store
+
+.vercel
+.env*
+
+.claude/
+t.txt

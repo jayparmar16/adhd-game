@@ -92,6 +92,7 @@ export function clearLines(board) {
   return { board: { ...board, cells: keep.flat() }, cleared: full.length };
 }
 
-// Gentle DDA: level rises slowly with lines cleared (absorption, not adrenaline).
-export function levelFromLines(totalLines) { return Math.floor(totalLines / 6); }
-export function fallInterval(level) { return Math.max(320, 850 - level * 45); } // ms
+// Level comes from the shared 15s tick (dda.js) — higher level means more
+// visuospatial load, which is the mechanism, not adrenaline. There is still no
+// fail state: topping out soft-clears the board.
+export function fallInterval(level) { return Math.max(190, 620 - level * 42); } // ms

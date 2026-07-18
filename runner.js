@@ -19,22 +19,16 @@ export function nearMiss(px, py, ps, ox, oy, ow, oh, thresh) {
   return gap > 0 && gap < thresh;
 }
 
-// Difficulty rises with distance travelled and with the persisted skill level,
+// Difficulty rises with distance travelled and with the persisted level,
 // keeping challenge ≈ skill (the flow channel / EndeavorOTC-style curation).
-export function difficulty(distance, skill) {
+// Level 0 is a medium start, not a gentle one; caps sit high enough that a
+// strong player never saturates the curve. Level comes from dda.js.
+export function difficulty(distance, level) {
   const t = distance / 1000;
-  const speed = Math.min(900, 250 + skill * 20 + t * 85);        // px/s
-  const spawnGap = Math.max(0.6, 1.2 - skill * 0.025 - t * 0.05); // s between obstacles
-  const maxH = Math.min(0.42, 0.2 + skill * 0.012 + t * 0.03);    // fraction of play height
+  const speed = Math.min(1400, 430 + level * 26 + t * 130);          // px/s
+  const spawnGap = Math.max(0.34, 1.05 - level * 0.020 - t * 0.055); // s between obstacles
+  const maxH = Math.min(0.55, 0.26 + level * 0.010 + t * 0.032);     // fraction of play height
   return { speed, spawnGap, maxH };
-}
-
-// Between-run staircase: nudge skill so a typical run lasts ~`target` seconds.
-// Survive long → harder next time; die fast → ease off. This is the DDA.
-export function stepSkill(skill, survivedSeconds, target = 25) {
-  if (survivedSeconds > target * 1.5) return Math.min(40, skill + 1);
-  if (survivedSeconds < target * 0.4) return Math.max(0, skill - 1);
-  return skill;
 }
 
 // Score = metres + near-miss bank, both scaled by the live multiplier.

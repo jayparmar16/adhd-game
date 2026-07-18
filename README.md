@@ -28,10 +28,11 @@ All three games work fully offline. Adding background music (optional, FLUX/STAX
 ## How to play
 
 - Open it → answer **3 taps** about how you feel right now (or hit "I know what I want" and pick a game directly).
-- **FLUX:** tap / click / space to flip gravity. Snap between rails to dodge neon blocks. **Near-miss** an obstacle to build your multiplier. Crash = instant restart.
-- **STAX:** ←/→ to move, ↑ to rotate, ↓ to soft-drop (swipe down on touch = hard drop). Clear lines for a soft glow. Topping out just clears the board and keeps going — no crash, no shake.
-- **PULSE:** tap / click / space the instant the ring closes on the target. Tempo climbs on a hit streak, eases off on a miss streak.
-- Every game **adapts to you** between runs — FLUX and STAX carry a persisted skill/level, PULSE carries a persisted starting tempo — so it stays in the flow channel: never boring, never hopeless.
+- Each game shows a **how-to-play card** with its goal and the controls **for your device** — key hints on desktop, tap/swipe hints on a phone.
+- **FLUX:** flip gravity to dodge the neon blocks. **Near-miss** one to build your multiplier. Crash = instant restart.
+- **STAX:** fill a row to clear it. Topping out just clears the board and keeps going — no crash, no shake.
+- **PULSE:** tap the moment the ring meets the dot. Tempo climbs as you land them.
+- Every game **adapts to you**: every 15 seconds it compares what you scored against par for your level and moves the level by `round(3 · log₂(scored/par))` — beat par by 4× and you jump 6 levels at once. It converges on your edge in about a minute and persists between sessions, so you start warm next time.
 - When you're warmed up, hit **Stop** → **Start a focus block** and it carries you into the task you named, with a calm timer and a garden that grows each session.
 
 Optionally paste a **YouTube link** on the start screen and your song plays underneath as a backing track (FLUX and STAX only — PULSE has its own click track).
@@ -50,6 +51,7 @@ Optionally paste a **YouTube link** on the start screen and your song plays unde
 - **FLUX** — gravity-flip runner (`runner.js`)
 - **STAX** — falling-block stacker (`stax.js`)
 - **PULSE** — tempo-tap ring (`pulse.js`)
+- **The difficulty formula** — one shared adaptive staircase for all three games (`dda.js`)
 - The check-in, shared canvas engine, and handoff live in `game.js`; optional YouTube music via `yt.js`
 - **Alongside** — the handoff destination: a calm focus timer, session reflection, and a garden that grows one flower per focus block (`app.js`)
 - Full local-first storage (no account), export/import as JSON, PWA install + offline

@@ -2,14 +2,15 @@
 // FLUX (bored/understimulated → action), STAX (racing/wired → visuospatial calm),
 // PULSE (foggy/can't-start → rhythmic activation). A 3-question check-in routes
 // to the right one; each hands off, primed, to real work. See STRATEGY.md.
-import { PLAYER_SIZE, aabb, nearMiss, difficulty, stepSkill, runScore } from './runner.js';
+import { PLAYER_SIZE, aabb, nearMiss, difficulty, runScore } from './runner.js';
 import {
   createBoard, spawnPiece, cellsOf, collides, tryMove, rotate, dropDistance,
-  merge, clearLines, levelFromLines, fallInterval, COLS, ROWS,
+  merge, clearLines, fallInterval, COLS, ROWS,
 } from './stax.js';
 import {
-  START_BPM, BASE_WINDOW, beatInterval, nearestBeatOffset, judge, stepPulse,
+  START_BPM, beatInterval, nearestBeatOffset, judge, bpmForLevel, windowFor, easeFor,
 } from './pulse.js';
+import { TICK_S, par, stepLevel } from './dda.js';
 import { createYTClock } from './yt.js';
 import { parseVideoId } from './chart.js';
 
@@ -39,13 +40,30 @@ const CHECKIN_QUESTIONS = [
       { label: 'Get me rolling', vote: 'pulse' },
   ]},
 ];
+// Per game: why it was picked, what you're trying to DO, and the controls for
+// each input kind. `basePar` is the score expected in one 15s tick at level 0.
 const GAME_META = {
-  flux:  { title: 'FLUX',  why: "Bored mind → FLUX. Give it real stakes to chase.",
-           hint: 'tap / click / space to flip gravity · that’s the whole game' },
-  stax:  { title: 'STAX',  why: 'Racing mind → STAX. Give the loop something to hold.',
-           hint: '←/→ move · ↑ rotate · ↓ soft drop · swipe down = hard drop' },
-  pulse: { title: 'PULSE', why: "Foggy? → PULSE. Small wins, rising tempo, get you rolling.",
-           hint: 'tap / click / space on the beat' },
+  flux: {
+    title: 'FLUX', why: 'Bored mind → FLUX. Give it real stakes to chase.',
+    goal: 'Dodge the neon blocks. Thread them close for bonus points.',
+    keys: [['space / click', 'flip gravity']],
+    touch: [['tap anywhere', 'flip gravity']],
+    basePar: 900,
+  },
+  stax: {
+    title: 'STAX', why: 'Racing mind → STAX. Give the loop something to hold.',
+    goal: 'Fill a row to clear it. No game over — just keep stacking.',
+    keys: [['← →', 'move'], ['↑', 'rotate'], ['↓', 'soft drop'], ['space', 'hard drop']],
+    touch: [['tap left / right', 'move'], ['tap middle', 'rotate'], ['swipe down', 'hard drop']],
+    basePar: 150,
+  },
+  pulse: {
+    title: 'PULSE', why: 'Foggy? → PULSE. Small wins, rising tempo, get you rolling.',
+    goal: 'Tap the moment the ring meets the dot.',
+    keys: [['space / click', 'tap on the beat']],
+    touch: [['tap anywhere', 'tap on the beat']],
+    basePar: 150,
+  },
 };
 
 export function initPrime({ state, save, startFocus }) {
@@ -62,7 +80,8 @@ export function initPrime({ state, save, startFocus }) {
   g.totalRuns = g.totalRuns ?? 0;
   g.staxLevel = g.staxLevel ?? 0;
   g.staxBest = g.staxBest ?? 0;
-  g.pulseBpm = g.pulseBpm ?? START_BPM;
+  // migrate: older builds persisted a raw bpm instead of a level
+  g.pulseLevel = g.pulseLevel ?? (g.pulseBpm ? Math.round((g.pulseBpm - START_BPM) / 6) : 0);
   g.pulseBestCombo = g.pulseBestCombo ?? 0;
   g.checkins = Array.isArray(g.checkins) ? g.checkins : [];
 
@@ -81,6 +100,13 @@ export function initPrime({ state, save, startFocus }) {
   let checkinStep = 0;
   let checkinVotes = [];
   let pointerStart = null;
+  // Which control set to show. Seeded from the device, then corrected by the
+  // first real input — handles touchscreen laptops and tablets with keyboards.
+  let touchMode = matchMedia('(pointer: coarse)').matches;
+  let tickAt = 0;             // next playElapsed value at which the DDA ticks
+  let tickScore = 0;          // score banked at the start of the current window
+  let sessionScore = 0;       // monotonic score this visit — drives the DDA
+  let levelFlash = 0;         // seconds of "LEVEL UP" flash remaining
 
   function sub(name) {
     subViews.forEach(v => el(v).classList.toggle('hidden', v !== name));
@@ -161,13 +187,43 @@ export function initPrime({ state, save, startFocus }) {
     b.addEventListener('click', () => chooseGame(b.dataset.game));
   });
 
+  // ---------- controls / instructions ----------
+  function controlRows(mode) {
+    const meta = GAME_META[mode];
+    return touchMode ? meta.touch : meta.keys;
+  }
+  function renderControls() {
+    const meta = GAME_META[activeGame];
+    el('control-goal').textContent = meta.goal;
+    const box = el('control-rows');
+    box.innerHTML = '';
+    controlRows(activeGame).forEach(([key, action]) => {
+      const row = document.createElement('div');
+      row.className = 'control-row';
+      const k = document.createElement('kbd');
+      k.textContent = key;
+      const a = document.createElement('span');
+      a.textContent = action;
+      row.append(k, a);
+      box.append(row);
+    });
+    // compact one-liner for the play screen
+    el('game-keys').textContent = controlRows(activeGame)
+      .map(([k, a]) => `${k} ${a}`).join(' · ');
+  }
+  function setTouchMode(isTouch) {
+    if (touchMode === isTouch) return;
+    touchMode = isTouch;
+    renderControls();
+  }
+  document.addEventListener('keydown', () => setTouchMode(false));
+
   function chooseGame(mode) {
     activeGame = mode;
     const meta = GAME_META[mode];
     el('game-title').textContent = meta.title;
     el('game-why').textContent = meta.why;
-    el('game-hint').textContent = meta.hint;
-    el('game-keys').textContent = meta.hint;
+    renderControls();
     el('yt-field').classList.toggle('hidden', mode === 'pulse');
     el('checkin-q').classList.remove('hidden');
     el('checkin-chips').classList.add('hidden');
@@ -206,6 +262,10 @@ export function initPrime({ state, save, startFocus }) {
       if (!id) { el('prime-error').textContent = "That doesn't look like a YouTube link — leave it blank to play without music."; return; }
       startMusic(id);
     }
+    // fresh session: the DDA window spans the whole visit, not a single run
+    playElapsed = 0;
+    sessionScore = 0;
+    resetDda();
     startGame(activeGame);
   }
 
@@ -251,6 +311,35 @@ export function initPrime({ state, save, startFocus }) {
     else if (mode === 'pulse') pulseStart();
   }
 
+  // ---------- the DDA (see dda.js) ----------
+  // One mechanism for all three games: every TICK_S of active play, compare the
+  // score earned in that window against par for the current level.
+  const LEVEL_KEY = { flux: 'skill', stax: 'staxLevel', pulse: 'pulseLevel' };
+  function getLevel() { return g[LEVEL_KEY[activeGame]] || 0; }
+  function setLevel(v) { g[LEVEL_KEY[activeGame]] = v; }
+
+  function resetDda() {
+    tickAt = playElapsed + TICK_S;
+    tickScore = sessionScore;
+  }
+
+  function ddaTick() {
+    const scored = sessionScore - tickScore;
+    tickScore = sessionScore;
+    const before = getLevel();
+    const after = stepLevel(before, scored, par(before, GAME_META[activeGame].basePar));
+    if (activeGame === 'pulse' && pulse) {
+      // grant slack after a bad patch, tighten back when playing clean
+      pulse.ease = easeFor(pulse.winTaps ? pulse.winHits / pulse.winTaps : 1);
+      pulse.winHits = 0; pulse.winTaps = 0;
+      setPulseBpm(bpmForLevel(after));   // also refreshes the window with the new ease
+    }
+    if (after === before) return;
+    setLevel(after);
+    if (after > before) { levelFlash = 1.2; blip(880, 0.12, 'triangle', 0.10); }
+    save();
+  }
+
   // ================= FLUX (bored/understimulated → action) =================
   function startRun() {
     beginPlay();
@@ -279,8 +368,7 @@ export function initPrime({ state, save, startFocus }) {
     burst(run.px + PLAYER_SIZE / 2, run.py + PLAYER_SIZE / 2, 34, '#ff4d6d');
     if (run.score > g.bestScore) { g.bestScore = run.score; run.newBest = true; }
     if (run.dist > g.bestDist) g.bestDist = Math.floor(run.dist);
-    g.skill = stepSkill(g.skill, run._elapsed || 0);   // DDA: converge to the flow band
-    save();
+    save();   // difficulty itself is handled by the 15s DDA tick, not by dying
     updateHud();
   }
 
@@ -324,9 +412,10 @@ export function initPrime({ state, save, startFocus }) {
 
     if (!run.dead) {
       run._elapsed = (run._elapsed || 0) + dt;
-      playElapsed += dt;
       const d = difficulty(run.dist, g.skill);
-      run.dist += d.speed * dt / 8;      // metres (8px ≈ 1m)
+      const gained = d.speed * dt / 8;   // metres (8px ≈ 1m)
+      run.dist += gained;
+      sessionScore += gained;
       run.grid = (run.grid + d.speed * dt) % 40;
 
       // physics
@@ -351,6 +440,7 @@ export function initPrime({ state, save, startFocus }) {
         if (!o.scored && nearMiss(run.px, run.py, PLAYER_SIZE, o.x, o.y, o.w, o.h, NEARMISS_PX)) {
           o.scored = true;
           run.nearBank += 25 * run.mult;
+          sessionScore += 25 * run.mult;
           run.mult = Math.min(9, run.mult + 1);
           run.sinceNear = 0;
           sfxNear();
@@ -434,6 +524,7 @@ export function initPrime({ state, save, startFocus }) {
       if (run.dead) drawDeadOverlay();
       else if (run.showNudge > 0) { run.showNudge--; drawNudge(); }
     }
+    drawLevelFlash();
     ctx.restore();
   }
 
@@ -508,10 +599,23 @@ export function initPrime({ state, save, startFocus }) {
   }
 
   function updateHud() {
-    el('hud-dist').textContent = `${run ? Math.floor(run.dist) : 0} m`;
+    el('hud-dist').textContent = `${run ? Math.floor(run.dist) : 0} m · lvl ${g.skill}`;
     el('hud-mult').textContent = `×${run ? run.mult : 1}`;
     el('hud-best').textContent = `best ${g.bestScore.toLocaleString()}`;
-    el('hud-mult').classList.toggle('hot', run && run.mult >= 3);
+    el('hud-mult').classList.toggle('hot', !!run && run.mult >= 3);
+  }
+
+  // Shown over the canvas whenever the DDA steps you up — makes the escalation felt.
+  function drawLevelFlash() {
+    if (levelFlash <= 0) return;
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, levelFlash);
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#f4d47c';
+    ctx.font = '700 26px system-ui, sans-serif';
+    ctx.fillText(`LEVEL ${getLevel()}`, W / 2, 44);
+    ctx.textAlign = 'left';
+    ctx.restore();
   }
 
   // ================= STAX (racing/wired → visuospatial calm) =================
@@ -519,7 +623,7 @@ export function initPrime({ state, save, startFocus }) {
     beginPlay();
     stax = {
       board: createBoard(), piece: spawnPiece(), next: spawnPiece(),
-      fallTimer: 0, lines: 0, level: g.staxLevel, score: 0, flash: 0,
+      fallTimer: 0, lines: 0, score: 0, flash: 0,
     };
     g.staxRuns = (g.staxRuns || 0) + 1;
     updateHudStax();
@@ -530,9 +634,10 @@ export function initPrime({ state, save, startFocus }) {
     const cl = clearLines(stax.board);
     stax.board = cl.board;
     if (cl.cleared) {
+      const points = [0, 100, 300, 500, 800][cl.cleared] || cl.cleared * 200;
       stax.lines += cl.cleared;
-      stax.score += [0, 100, 300, 500, 800][cl.cleared] || cl.cleared * 200;
-      stax.level = levelFromLines(stax.lines);
+      stax.score += points;
+      sessionScore += points;   // feeds the 15s DDA tick
       stax.flash = 0.25;
       sfxNear();
     }
@@ -541,11 +646,11 @@ export function initPrime({ state, save, startFocus }) {
     if (collides(stax.board, stax.piece)) staxTopOut();
   }
   function staxTopOut() {
+    // no fail state: soft-clear and keep going. Difficulty is the DDA's job.
     if (stax.lines > g.staxBest) g.staxBest = stax.lines;
-    g.staxLevel = Math.max(0, stax.level - 1); // ease back a touch for next time
+    g.staxLevel = Math.max(0, g.staxLevel - 1); // ease back a touch
     save();
     stax.board = createBoard();
-    stax.level = g.staxLevel;
     stax.piece = spawnPiece();
     stax.next = spawnPiece();
     stax.flash = 0.4;
@@ -573,14 +678,15 @@ export function initPrime({ state, save, startFocus }) {
     if (!stax) return;
     if (e.code === 'ArrowLeft')  { e.preventDefault(); staxTryMove(-1, 0); }
     else if (e.code === 'ArrowRight') { e.preventDefault(); staxTryMove(1, 0); }
-    else if (e.code === 'ArrowUp' || e.code === 'Space') { e.preventDefault(); staxRotate(); }
+    else if (e.code === 'ArrowUp') { e.preventDefault(); staxRotate(); }
     else if (e.code === 'ArrowDown') { e.preventDefault(); staxTryMove(0, 1); }
+    else if (e.code === 'Space') { e.preventDefault(); staxHardDrop(); }   // parity with swipe-down on touch
   }
 
   function frameStax(dt) {
     if (!stax) return;
     stax.fallTimer += dt;
-    const interval = fallInterval(stax.level) / 1000;
+    const interval = fallInterval(g.staxLevel) / 1000;
     if (stax.fallTimer >= interval) {
       stax.fallTimer = 0;
       const moved = tryMove(stax.board, stax.piece, 0, 1);
@@ -609,6 +715,7 @@ export function initPrime({ state, save, startFocus }) {
       if (y >= 0) drawStaxCell(ox + x * cell, oy + y * cell, cell, PIECE_COLORS[stax.piece.type]);
     }
     if (stax.flash > 0) { ctx.fillStyle = `rgba(123,255,234,${stax.flash * 0.5})`; ctx.fillRect(ox, oy, boardW, boardH); }
+    drawLevelFlash();
     ctx.restore();
   }
   function drawStaxCell(x, y, s, color) {
@@ -620,19 +727,19 @@ export function initPrime({ state, save, startFocus }) {
 
   function updateHudStax() {
     el('hud-dist').textContent = `${stax.lines} lines`;
-    el('hud-mult').textContent = `lvl ${stax.level}`;
+    el('hud-mult').textContent = `lvl ${g.staxLevel}`;
     el('hud-best').textContent = `best ${g.staxBest}`;
+    el('hud-mult').classList.toggle('hot', levelFlash > 0);
   }
 
   function toPeakStax() {
     el('peak-title').textContent = 'Settled.';
-    el('peak-stats').textContent = `${stax.lines} lines cleared · best ${Math.max(g.staxBest, stax.lines)} · level ${stax.level}`;
+    el('peak-stats').textContent = `${stax.lines} lines cleared · best ${Math.max(g.staxBest, stax.lines)} · level ${g.staxLevel}`;
     const intention = el('prime-intention').value.trim();
     el('peak-focus-btn').textContent = intention ? `Start focus: ${intention}` : 'Start a focus block';
     el('peak-nudge').textContent = playElapsed > PRIME_HINT_S ? "quieter now — good time to move." : "settled? ride it into your task.";
     if (stax.lines > g.staxBest) g.staxBest = stax.lines;
-    g.staxLevel = stax.level;
-    save();
+    save();   // g.staxLevel is already current — the DDA tick owns it
     stax = null;
     if (raf) { cancelAnimationFrame(raf); raf = null; }
     sub('prime-peak');
@@ -642,13 +749,29 @@ export function initPrime({ state, save, startFocus }) {
   // ================= PULSE (foggy/can't-start → rhythmic activation) =================
   function pulseStart() {
     beginPlay();
+    const bpm = bpmForLevel(g.pulseLevel);
     pulse = {
-      startT: performance.now() / 1000, bpm: g.pulseBpm, window: { ...BASE_WINDOW },
-      hitStreak: 0, missStreak: 0, score: 0, combo: 0, bestCombo: 0,
+      startT: performance.now() / 1000, bpm, ease: 0, window: windowFor(bpm, 0),
+      score: 0, combo: 0, bestCombo: 0, winHits: 0, winTaps: 0,
       lastBeatPlayed: -1, hitFlash: 0, missFlash: 0,
     };
     g.pulseRuns = (g.pulseRuns || 0) + 1;
     updateHudPulse();
+  }
+
+  // Re-anchor the beat grid so a tempo change keeps the current phase — without
+  // this the beat audibly jumps and in-flight taps get judged against a grid
+  // that moved under them.
+  function setPulseBpm(next) {
+    if (!pulse || next === pulse.bpm) return;
+    const now = performance.now() / 1000;
+    const oldIv = beatInterval(pulse.bpm);
+    const phase = ((now - pulse.startT) % oldIv) / oldIv;
+    const newIv = beatInterval(next);
+    pulse.startT = now - phase * newIv;
+    pulse.bpm = next;
+    pulse.lastBeatPlayed = Math.floor((now - pulse.startT) / newIv);
+    pulse.window = windowFor(next, pulse.ease);
   }
 
   function pulseTap() {
@@ -656,18 +779,20 @@ export function initPrime({ state, save, startFocus }) {
     const t = performance.now() / 1000 - pulse.startT;
     const interval = beatInterval(pulse.bpm);
     const result = judge(nearestBeatOffset(t, interval), pulse.window);
+    pulse.winTaps++;
     if (result === 'miss') {
-      pulse.combo = 0; pulse.missStreak++; pulse.hitStreak = 0;
+      pulse.combo = 0;
       pulse.missFlash = 0.15;
     } else {
-      pulse.combo++; pulse.hitStreak++; pulse.missStreak = 0;
+      const points = result === 'perfect' ? 15 : 8;
+      pulse.combo++;
+      pulse.winHits++;
       pulse.bestCombo = Math.max(pulse.bestCombo, pulse.combo);
-      pulse.score += result === 'perfect' ? 15 : 8;
+      pulse.score += points;
+      sessionScore += points;   // feeds the 15s DDA tick
       pulse.hitFlash = 0.15;
       sfxNear();
     }
-    const stepped = stepPulse(pulse.bpm, pulse.window, pulse.hitStreak, pulse.missStreak);
-    pulse.bpm = stepped.bpm; pulse.window = stepped.window;
   }
 
   function framePulse(dt) {
@@ -696,6 +821,7 @@ export function initPrime({ state, save, startFocus }) {
     ctx.font = '600 22px system-ui, sans-serif';
     ctx.fillText(`${Math.round(pulse.bpm)} bpm`, cx, cy - 120);
     ctx.textAlign = 'left';
+    drawLevelFlash();
     ctx.restore();
   }
 
@@ -713,7 +839,7 @@ export function initPrime({ state, save, startFocus }) {
     el('peak-focus-btn').textContent = intention ? `Start focus: ${intention}` : 'Start a focus block';
     el('peak-nudge').textContent = 'warmed up — go.';
     if (pulse.bestCombo > g.pulseBestCombo) g.pulseBestCombo = pulse.bestCombo;
-    g.pulseBpm = Math.max(START_BPM, pulse.bpm - 8); // next session starts a bit warmer, not maxed
+    g.pulseLevel = Math.max(0, g.pulseLevel - 1); // resume a touch below your peak
     save();
     pulse = null;
     if (raf) { cancelAnimationFrame(raf); raf = null; }
@@ -746,6 +872,7 @@ export function initPrime({ state, save, startFocus }) {
   document.addEventListener('keydown', onKey);
   canvas.addEventListener('pointerdown', e => {
     e.preventDefault();
+    setTouchMode(e.pointerType === 'touch');
     const rect = canvas.getBoundingClientRect();
     pointerStart = { x: e.clientX - rect.left, y: e.clientY - rect.top };
     if (activeGame === 'flux') flip();
@@ -767,6 +894,15 @@ export function initPrime({ state, save, startFocus }) {
     let dt = (now - lastT) / 1000;
     lastT = now;
     if (dt > 0.05) dt = 0.05;           // clamp after tab-switch
+
+    // Play time accrues across deaths, so the DDA still ticks in FLUX.
+    const active = activeGame === 'flux' ? !!(run && !run.dead) : !!(stax || pulse);
+    if (active) {
+      playElapsed += dt;
+      if (playElapsed >= tickAt) { tickAt = playElapsed + TICK_S; ddaTick(); }
+    }
+    if (levelFlash > 0) levelFlash = Math.max(0, levelFlash - dt);
+
     if (activeGame === 'flux') frameFlux(dt);
     else if (activeGame === 'stax') frameStax(dt);
     else if (activeGame === 'pulse') framePulse(dt);

@@ -1,14 +1,16 @@
 // Runnable check for the pure game logic. Run: node test.mjs
 import assert from 'node:assert';
-import { aabb, nearMiss, difficulty, stepSkill, runScore, PLAYER_SIZE } from './runner.js';
+import { aabb, nearMiss, difficulty, runScore, PLAYER_SIZE } from './runner.js';
 import { parseVideoId } from './chart.js';
 import {
   createBoard, spawnPiece, cellsOf, collides, tryMove, rotate, dropDistance,
-  merge, clearLines, levelFromLines, fallInterval, COLS, ROWS,
+  merge, clearLines, fallInterval, COLS, ROWS,
 } from './stax.js';
 import {
-  beatInterval, nearestBeatOffset, judge, stepPulse, START_BPM, BASE_WINDOW,
+  beatInterval, nearestBeatOffset, judge, windowFor, bpmForLevel, easeFor,
+  START_BPM, MAX_BPM,
 } from './pulse.js';
+import { par, stepLevel, TICK_S } from './dda.js';
 
 // --- collision ---
 assert.ok(aabb(0, 0, 10, 10, 5, 5, 10, 10), 'overlap');
@@ -32,15 +34,40 @@ const dSkilled = difficulty(0, 10);
 assert.ok(dFar.speed > d0.speed, 'faster further out');
 assert.ok(dSkilled.speed > d0.speed, 'faster at higher skill');
 assert.ok(dFar.spawnGap < d0.spawnGap, 'obstacles closer further out');
-assert.ok(difficulty(1e6, 40).speed <= 900, 'speed is capped');
-assert.ok(d0.spawnGap >= 0.6, 'spawn gap floored');
+assert.ok(difficulty(1e6, 60).speed <= 1400, 'speed is capped');
+assert.ok(difficulty(1e6, 60).spawnGap >= 0.34, 'spawn gap floored');
+assert.ok(difficulty(1e6, 60).maxH <= 0.55, 'obstacle height capped so a gap always remains');
 
-// --- DDA staircase: keep runs near ~25s ---
-assert.equal(stepSkill(5, 60), 6, 'long survival → harder');
-assert.equal(stepSkill(5, 5), 4, 'quick death → easier');
-assert.equal(stepSkill(5, 25), 5, 'in-band → unchanged');
-assert.equal(stepSkill(0, 1), 0, 'skill floored at 0');
-assert.equal(stepSkill(40, 999), 40, 'skill ceilinged at 40');
+// --- the shared DDA formula (dda.js) ---
+{
+  assert.equal(TICK_S, 15, 'difficulty re-evaluates every 15s of play');
+
+  // symmetric in log space: double par → +gain, half par → −gain
+  assert.equal(stepLevel(10, 200, 100), 13, 'double par → +3');
+  assert.equal(stepLevel(10, 50, 100), 7, 'half par → −3');
+  assert.equal(stepLevel(10, 100, 100), 10, 'exactly par → unchanged');
+
+  // responsive: a big overperformance jumps several levels in ONE tick
+  assert.equal(stepLevel(0, 400, 100), 6, '4× par jumps +6 at once');
+  assert.ok(stepLevel(0, 1600, 100) > stepLevel(0, 400, 100), 'better play → bigger jump');
+
+  // small deviations sit in the round() dead band, so it settles
+  assert.equal(stepLevel(10, 105, 100), 10, '+5% is within the dead band');
+  assert.equal(stepLevel(10, 95, 100), 10, '−5% is within the dead band');
+
+  // clamped, and a scoreless window always eases off
+  assert.equal(stepLevel(0, 1, 1e6), 0, 'level floored at 0');
+  assert.equal(stepLevel(60, 1e9, 100), 60, 'level ceilinged at 60');
+  assert.equal(stepLevel(10, 0, 100), 7, 'scored nothing → ease off');
+
+  // par rises with level, so staying ahead requires improving
+  assert.ok(par(10, 100) > par(0, 100), 'par climbs with level');
+  assert.equal(par(0, 100), 100, 'par at level 0 is the base');
+}
+
+// --- FLUX starts at a medium difficulty, not a gentle one ---
+assert.ok(difficulty(0, 0).speed >= 400, 'level 0 is medium, not slow');
+assert.ok(difficulty(0, 40).speed > difficulty(0, 20).speed, 'curve has not saturated by level 20');
 
 // --- score ---
 assert.equal(runScore(123.9, 200), 323, 'metres floored + near-miss bank');
@@ -87,9 +114,9 @@ assert.equal(parseVideoId(''), null);
   const placed = merge(createBoard(), { ...o, y: ROWS - 2 });
   assert.ok(placed.cells.some(Boolean), 'merge writes cells');
 
-  assert.ok(levelFromLines(12) > levelFromLines(0), 'level rises with lines cleared');
   assert.ok(fallInterval(10) < fallInterval(0), 'higher level falls faster');
-  assert.ok(fallInterval(999) >= 320, 'fall interval floored — stays gentle, never frantic');
+  assert.ok(fallInterval(999) >= 190, 'fall interval floored — load rises, but never frantic');
+  assert.ok(fallInterval(0) <= 620, 'level 0 is a medium pace, not a crawl');
 }
 
 // --- PULSE: tempo-tap ring ---
@@ -98,16 +125,27 @@ assert.equal(parseVideoId(''), null);
   assert.equal(interval, 1, '60 bpm = 1s beats');
   assert.ok(Math.abs(nearestBeatOffset(0.02, interval)) < 0.03, 'tap just after a beat reads as a small positive offset');
   assert.ok(Math.abs(nearestBeatOffset(0.98, interval)) < 0.03, 'tap just before the next beat reads as a small offset too');
-  assert.equal(judge(0.02, BASE_WINDOW), 'perfect', 'inside the perfect window');
-  assert.equal(judge(0.1, BASE_WINDOW), 'good', 'inside the good window');
-  assert.equal(judge(0.3, BASE_WINDOW), 'miss', 'outside both windows');
+  const slow = windowFor(60);
+  assert.equal(judge(0.02, slow), 'perfect', 'inside the perfect window');
+  assert.equal(judge(0.15, slow), 'good', 'inside the good window');
+  assert.equal(judge(0.4, slow), 'miss', 'outside both windows');
 
-  const afterHits = stepPulse(60, BASE_WINDOW, 4, 0);
-  assert.equal(afterHits.bpm, 62, 'a 4-hit streak nudges tempo up');
-  const afterMisses = stepPulse(100, BASE_WINDOW, 0, 3);
-  assert.equal(afterMisses.bpm, 98, 'a 3-miss streak eases tempo back down');
-  assert.ok(afterMisses.window.perfect > BASE_WINDOW.perfect, 'miss streak widens the timing window');
-  assert.equal(stepPulse(START_BPM, BASE_WINDOW, 0, 3).bpm, START_BPM, 'tempo never drops below the starting bpm');
+  // the bug this fixes: an ABSOLUTE window gets relatively easier as beats
+  // shorten. Windows must shrink with tempo to stay proportionally demanding.
+  const fast = windowFor(180);
+  assert.ok(fast.good < slow.good, 'faster tempo tightens the window');
+  assert.ok(fast.good / beatInterval(180) <= slow.good / beatInterval(60) + 1e-9,
+    'window never becomes a LARGER share of the beat as tempo rises');
+
+  // tempo from level, clamped
+  assert.equal(bpmForLevel(0), START_BPM, 'level 0 starts at the resting on-ramp');
+  assert.ok(bpmForLevel(10) > bpmForLevel(0), 'tempo climbs with level');
+  assert.equal(bpmForLevel(999), MAX_BPM, 'tempo capped');
+
+  // anti-frustration slack
+  assert.equal(easeFor(1), 0, 'clean play gets no slack');
+  assert.ok(easeFor(0.3) > easeFor(0.6), 'a bad patch grants more slack');
+  assert.ok(windowFor(120, easeFor(0.3)).good > windowFor(120, 0).good, 'ease widens the window');
 }
 
 console.log('all runner.js / stax.js / pulse.js checks passed');
