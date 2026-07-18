@@ -1,0 +1,15 @@
+{
+  "name": "Alongside — focus companion",
+  "short_name": "Alongside",
+  "description": "A calm, free focus companion for adults with ADHD. Body doubling that works offline.",
+  "start_url": ".",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0b0f1a",
+  "theme_color": "#0b0f1a",
+  "categories": ["health", "productivity", "lifestyle"],
+  "icons": [
+    { "src": "./icon.svg", "type": "image/svg+xml", "sizes": "any", "purpose": "any maskable" }
+  ]
+}

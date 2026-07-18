@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0f1a">
+  <title>Alongside — a calm focus companion</title>
+  <meta name="description" content="A free, open-source focus companion for adults with ADHD.">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" href="./icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="./icon.svg">
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <svg id="world-svg" viewBox="0 0 1000 200" preserveAspectRatio="xMidYMax slice" aria-hidden="true"></svg>
+
+  <div id="yt-holder" class="hidden" aria-label="Background music player">
+    <div id="yt-player"></div>
+  </div>
+
+  <div id="companion" aria-hidden="true">
+    <svg viewBox="0 0 100 100">
+      <circle class="companion-body" cx="50" cy="50" r="30"/>
+      <circle class="companion-eye" cx="42" cy="45" r="3"/>
+      <circle class="companion-eye" cx="58" cy="45" r="3"/>
+    </svg>
+  </div>
+  <div id="caption" role="status" aria-live="polite"></div>
+
+  <main id="app">
+
+    <section id="view-prime" class="view hidden">
+      <div id="prime-checkin" class="hidden">
+        <h1 class="neon-title">Check in</h1>
+        <p class="tagline">Three taps. We'll pick the right game for right now.</p>
+
+        <div id="checkin-q" class="session-setup">
+          <p class="checkin-progress" id="checkin-progress">1 / 3</p>
+          <p class="checkin-question" id="checkin-question"></p>
+          <div class="checkin-options" id="checkin-options"></div>
+          <button type="button" id="checkin-skip" class="ghost">I know what I want →</button>
+        </div>
+
+        <div id="checkin-chips" class="session-setup hidden">
+          <p class="checkin-question">Pick a game</p>
+          <div class="checkin-options">
+            <button type="button" class="checkin-opt" data-game="flux">FLUX — gravity-flip action</button>
+            <button type="button" class="checkin-opt" data-game="stax">STAX — slow block stacker</button>
+            <button type="button" class="checkin-opt" data-game="pulse">PULSE — tempo-tap ring</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="prime-setup" class="hidden">
+        <h1 class="neon-title" id="game-title">FLUX</h1>
+        <p class="tagline" id="game-why">Flip gravity. Thread the gaps. Get in the zone — then ride it into real work.</p>
+
+        <div class="session-setup">
+          <label>
+            <span>After this, I'll…</span>
+            <input type="text" id="prime-intention" placeholder="the task you'll ride into (optional)" maxlength="120" autocomplete="off">
+          </label>
+          <div id="yt-field">
+            <label>
+              <span>Background music — YouTube link (optional)</span>
+              <input type="text" id="yt-url" placeholder="paste a YouTube URL, or leave blank" autocomplete="off" inputmode="url">
+            </label>
+            <div id="recent-songs" class="recent-songs"></div>
+          </div>
+          <button type="button" id="prime-play-btn" class="primary neon-btn">Play ▸</button>
+          <p id="prime-error" class="prime-error" role="alert"></p>
+          <p class="fine-print" id="game-hint">tap / click / space to flip gravity · that's the whole game</p>
+        </div>
+
+        <nav class="footer-nav" aria-label="More">
+          <a href="#" id="retake-checkin">↺ retake check-in</a>
+          <a href="#/home">Focus timer</a>
+          <a href="#/history">History</a>
+          <a href="#/settings">Settings</a>
+        </nav>
+      </div>
+
+      <div id="prime-play" class="hidden">
+        <div class="hud" aria-hidden="true">
+          <span id="hud-dist">0 m</span>
+          <span id="hud-mult">×1</span>
+          <span id="hud-best">best 0</span>
+        </div>
+        <canvas id="game-canvas" aria-label="Gravity-flip runner. Tap, click, or press space to flip gravity and avoid obstacles."></canvas>
+        <div class="play-controls">
+          <span class="game-keys" id="game-keys">tap / space to flip</span>
+          <button type="button" id="game-quit" class="ghost">◼ Stop</button>
+        </div>
+      </div>
+
+      <div id="prime-peak" class="hidden">
+        <h2 id="peak-title" class="neon-title">You're primed.</h2>
+        <p id="peak-stats"></p>
+        <div class="reflect-actions">
+          <button type="button" id="peak-focus-btn" class="primary neon-btn">Start a focus block</button>
+        </div>
+        <div class="reflect-actions">
+          <button type="button" id="peak-again-btn" class="ghost">One more run</button>
+          <button type="button" id="peak-later-btn" class="ghost">Not now</button>
+        </div>
+        <p id="peak-nudge" class="fine-print"></p>
+      </div>
+    </section>
+
+    <section id="view-home" class="view hidden">
+      <h1>Alongside</h1>
+      <p class="tagline">A calm companion for focused work.</p>
+
+      <div id="comeback" class="hidden" role="status"></div>
+
+      <div class="session-setup" aria-label="Start a session">
+        <label>
+          <span>What are you working on?</span>
+          <input type="text" id="intention-input" placeholder="one line — the task you're starting" maxlength="120" autocomplete="off">
+        </label>
+
+        <div>
+          <div class="minutes-buttons" role="group" aria-label="Session length">
+            <button type="button" class="min-btn" data-min="15">15</button>
+            <button type="button" class="min-btn active" data-min="25">25</button>
+            <button type="button" class="min-btn" data-min="45">45</button>
+            <label class="custom-min">
+              custom
+              <input type="number" id="custom-minutes" min="1" max="180" placeholder="min" aria-label="Custom minutes">
+            </label>
+          </div>
+        </div>
+
+        <button type="button" id="start-btn" class="primary">Start</button>
+      </div>
+
+      <p class="totals" id="totals"></p>
+
+      <nav class="footer-nav" aria-label="More">
+        <a href="#/prime">Prime game</a>
+        <a href="#/history">History</a>
+        <a href="#/settings">Settings</a>
+        <a href="./STRATEGY.md">About</a>
+      </nav>
+    </section>
+
+    <section id="view-session" class="view hidden">
+      <p class="intention-display" id="session-intention"></p>
+      <div class="timer" id="timer" aria-live="off">25:00</div>
+      <progress id="progress" value="0" max="1" aria-label="Session progress"></progress>
+      <div class="session-controls">
+        <button type="button" id="pause-btn">Pause</button>
+        <button type="button" id="stop-btn" class="ghost">End early</button>
+      </div>
+    </section>
+
+    <section id="view-reflect" class="view hidden">
+      <h2>Nicely held.</h2>
+      <p id="reflect-summary"></p>
+
+      <div class="rating-row">
+        <span>Focus felt like:</span>
+        <div class="rating" data-name="focus" role="radiogroup" aria-label="Focus rating">
+          <button type="button" data-val="1">1</button>
+          <button type="button" data-val="2">2</button>
+          <button type="button" data-val="3">3</button>
+          <button type="button" data-val="4">4</button>
+          <button type="button" data-val="5">5</button>
+        </div>
+      </div>
+
+      <div class="rating-row">
+        <span>Mood:</span>
+        <div class="rating" data-name="mood" role="radiogroup" aria-label="Mood rating">
+          <button type="button" data-val="1">1</button>
+          <button type="button" data-val="2">2</button>
+          <button type="button" data-val="3">3</button>
+          <button type="button" data-val="4">4</button>
+          <button type="button" data-val="5">5</button>
+        </div>
+      </div>
+
+      <div class="reflect-actions">
+        <button type="button" id="save-reflect" class="primary">Save</button>
+        <button type="button" id="skip-reflect" class="ghost">Skip</button>
+      </div>
+    </section>
+
+    <section id="view-history" class="view hidden">
+      <h2>Your trajectory</h2>
+      <p id="history-summary"></p>
+      <svg id="chart-svg" viewBox="0 0 600 200" aria-label="Focus minutes per day for the last 30 days"></svg>
+      <ul id="recent-sessions"></ul>
+      <a href="#/" class="back">← Back</a>
+    </section>
+
+    <section id="view-settings" class="view hidden">
+      <h2>Settings</h2>
+
+      <label class="setting">
+        <span>Companion chattiness</span>
+        <select id="chattiness">
+          <option value="normal">Normal</option>
+          <option value="quiet">Quiet</option>
+          <option value="off">Off</option>
+        </select>
+      </label>
+
+      <label class="setting">
+        <span>Default session length (min)</span>
+        <input type="number" id="default-min" min="1" max="180">
+      </label>
+
+      <div class="settings-actions">
+        <button type="button" id="export-btn">Export data (JSON)</button>
+        <button type="button" id="import-btn">Import data</button>
+        <input type="file" id="import-file" accept="application/json" hidden>
+        <button type="button" id="wipe-btn" class="ghost danger">Erase all local data</button>
+      </div>
+
+      <p class="fine-print">All data stays on this device unless you export it. No account. No tracking. Not a medical device — a wellness tool informed by research. See <a href="./STRATEGY.md">STRATEGY.md</a>.</p>
+
+      <a href="#/" class="back">← Back</a>
+    </section>
+
+  </main>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
