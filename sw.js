@@ -1,10 +1,15 @@
 // Minimal stale-while-revalidate service worker for offline capability.
-const CACHE = 'alongside-v6';
+const CACHE = 'alongside-v7';
 const ASSETS = [
   './',
   './index.html',
   './style.css',
   './app.js',
+  './pixel.js',
+  './avatar.js',
+  './flats.js',
+  './progress.js',
+  './dive.js',
   './game.js',
   './runner.js',
   './stax.js',

@@ -406,6 +406,37 @@ body.in-game #caption { display: none; }
 .checkin-opt:hover { background: rgba(57, 208, 255, 0.14); }
 #checkin-skip { margin-top: 0.5rem; }
 
+/* -- DIVE: the pixel canvas owns its frame; no crisp chrome touching it -- */
+/* Full-bleed: #app caps at 40rem, which starves the canvas of the width it
+   needs for a 2x/3x integer scale. Breaking out is what lets the art be big. */
+.dive-wrap {
+  display: flex;
+  justify-content: center;
+  width: 100vw;
+  margin-left: calc(50% - 50vw);
+}
+body.in-dive #world-svg,
+body.in-dive #companion { display: none; }
+#dive-canvas {
+  display: block;
+  /* keeps the browser's CSS-px -> device-px step from blurring the art */
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  border: 2px solid #2a2450;
+  background: #07060f;
+  touch-action: none;
+  max-width: 100%;
+}
+.dive-intent {
+  display: grid;
+  gap: 0.35rem;
+  max-width: 34rem;
+  margin: 0.9rem auto 0;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+#view-dive .footer-nav { justify-content: center; }
+
 /* -- How-to-play card (rows swap with the device's input kind) -- */
 .control-card {
   background: rgba(57, 208, 255, 0.05);

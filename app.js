@@ -2,6 +2,7 @@
 // See STRATEGY.md for the design rationale.
 
 import { initPrime } from './game.js';
+import { initDive } from './dive.js';
 
 const KEY = 'alongside.v1';
 
@@ -20,13 +21,14 @@ const CAPTIONS = {
 const state = load();
 
 function load() {
-  const base = { history: [], settings: { defaultMinutes: 25, chattiness: 'normal' }, game: {} };
+  const base = { history: [], settings: { defaultMinutes: 25, chattiness: 'normal' }, game: {}, dive: {} };
   try {
     const raw = JSON.parse(localStorage.getItem(KEY) || '{}');
     return {
       history: Array.isArray(raw.history) ? raw.history : [],
       settings: { ...base.settings, ...(raw.settings || {}) },
       game: raw.game && typeof raw.game === 'object' ? raw.game : {},
+      dive: raw.dive && typeof raw.dive === 'object' ? raw.dive : {},
     };
   } catch {
     return base;
@@ -61,18 +63,20 @@ function uid() {
 }
 
 // ---- routing ----
-const VIEWS = ['prime', 'home', 'session', 'reflect', 'history', 'settings'];
+const VIEWS = ['dive', 'prime', 'home', 'session', 'reflect', 'history', 'settings'];
 let primeCtl = null; // set at startup, after initPrime()
+let diveCtl = null;  // set at startup, after initDive()
 function show(view) {
   VIEWS.forEach(v => document.getElementById('view-' + v).classList.toggle('hidden', v !== view));
   if (primeCtl) (view === 'prime' ? primeCtl.enter() : primeCtl.leave());
+  if (diveCtl) (view === 'dive' ? diveCtl.enter() : diveCtl.leave());
   if (view === 'home') renderHome();
   if (view === 'history') renderHistory();
   if (view === 'settings') renderSettings();
 }
 function route() {
-  const v = location.hash.replace(/^#\/?/, '') || 'prime';
-  show(VIEWS.includes(v) ? v : 'prime');
+  const v = location.hash.replace(/^#\/?/, '') || 'dive';
+  show(VIEWS.includes(v) ? v : 'dive');
 }
 window.addEventListener('hashchange', route);
 
@@ -283,16 +287,29 @@ document.querySelectorAll('.rating').forEach(row => {
     if (pendingReflection) pendingReflection[row.dataset.name + 'Rating'] = Number(b.dataset.val);
   });
 });
+// Real focus work is what actually levels the Diver — playing earns far less.
+// This is the structural answer to "the game becomes the procrastination".
+function awardFocusXp(withReflection) {
+  if (!diveCtl || !diveCtl.awardFocus) return;
+  const res = diveCtl.awardFocus(withReflection);
+  if (res && res.leveled) {
+    const what = res.unlocked && res.unlocked.length ? ` — unlocked ${res.unlocked[0].label}` : '';
+    sayCaption(`your diver reached level ${res.level}${what}`);
+  }
+}
+
 document.getElementById('save-reflect').addEventListener('click', () => {
   if (!pendingReflection) { location.hash = '#/'; return; }
   state.history.push(pendingReflection);
+  const rated = pendingReflection.focusRating != null || pendingReflection.moodRating != null;
   save();
+  awardFocusXp(rated);
   pendingReflection = null;
   intentionInput.value = '';
   location.hash = '#/';
 });
 document.getElementById('skip-reflect').addEventListener('click', () => {
-  if (pendingReflection) { state.history.push(pendingReflection); save(); }
+  if (pendingReflection) { state.history.push(pendingReflection); save(); awardFocusXp(false); }
   pendingReflection = null;
   intentionInput.value = '';
   location.hash = '#/';
@@ -452,6 +469,18 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
 
 // ---- prime game (rhythm flow-primer) ----
 primeCtl = initPrime({
+  state,
+  save,
+  startFocus(intention) {
+    startSession({
+      minutes: state.settings.defaultMinutes,
+      intention: intention || '(riding the wave)',
+    });
+  },
+});
+
+// ---- DIVE (pixel avatar game) ----
+diveCtl = initDive({
   state,
   save,
   startFocus(intention) {

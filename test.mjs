@@ -11,6 +11,26 @@ import {
   START_BPM, MAX_BPM,
 } from './pulse.js';
 import { par, stepLevel, TICK_S } from './dda.js';
+import {
+  xpForLevel, levelFromXp, levelProgress, awardXp, isUnlocked, XP,
+} from './progress.js';
+import {
+  defaultAvatar, sanitize, cycle, pose, colorMap, OPTIONS,
+} from './avatar.js';
+import {
+  createRun, speedOf, voidTarget, addMomentum, decayMomentum,
+  startJump, cutJump, startDash, startPulse, canDash, canPulse, isInvulnerable,
+  resolveHazard, takeHit, makeHazard, ANSWER,
+  GROUND_Y, PLAYER_X, MAX_FOCUS, PULSE_COST,
+} from './flats.js';
+
+// avatar.colorMap needs a palette; use a stub so tests stay DOM-free
+const colorMapOf = a => colorMap(a, {
+  black: '#000', white: '#fff', skin: ['#1', '#2', '#3', '#4'],
+  suit: ['#1', '#2', '#3', '#4'], hair: ['#1', '#2', '#3', '#4'],
+  warm: ['#1', '#2', '#3', '#4'], grey: ['#1', '#2', '#3', '#4'],
+  danger: ['#1', '#2', '#3', '#4'], bg: ['#1', '#2', '#3', '#4'], void: ['#1', '#2', '#3', '#4'],
+});
 
 // --- collision ---
 assert.ok(aabb(0, 0, 10, 10, 5, 5, 10, 10), 'overlap');
@@ -148,4 +168,160 @@ assert.equal(parseVideoId(''), null);
   assert.ok(windowFor(120, easeFor(0.3)).good > windowFor(120, 0).good, 'ease widens the window');
 }
 
-console.log('all runner.js / stax.js / pulse.js checks passed');
+// --- DIVE: progression (progress.js) ---
+{
+  assert.equal(levelFromXp(0), 0, 'start at level 0');
+  assert.ok(xpForLevel(2) > xpForLevel(1), 'each level costs more than the last');
+  assert.equal(levelFromXp(xpForLevel(3)), 3, 'exactly enough xp reaches the level');
+  assert.equal(levelFromXp(xpForLevel(3) - 1), 2, 'one short stays below');
+
+  const p = levelProgress(xpForLevel(1));
+  assert.ok(p >= 0 && p <= 1, 'progress is a 0..1 fraction');
+  assert.equal(levelProgress(xpForLevel(2)), 0, 'progress resets on hitting a level');
+
+  // the whole point of the design: real work must outweigh playing
+  assert.ok(XP.focusBlock > XP.mission * 5,
+    'a real focus block is worth far more than a mission — the game must not become the procrastination');
+
+  const res = awardXp(0, XP.focusBlock + XP.reflection);
+  assert.ok(res.xp > 0 && res.level >= 1, 'a focus block with reflection levels you up from zero');
+  assert.ok(res.leveled, 'crossing a boundary reports leveled');
+  assert.ok(res.unlocked.length >= 1, 'levelling reports what it unlocked');
+  assert.equal(awardXp(0, 0).leveled, false, 'no xp, no level');
+
+  // cosmetic gating
+  assert.ok(isUnlocked('visor', 'band', 0), 'starter options are always available');
+  assert.ok(!isUnlocked('suit', 'danger', 0), 'later cosmetics are gated at level 0');
+  assert.ok(isUnlocked('suit', 'danger', 9), 'and available once earned');
+}
+
+// --- DIVE: avatar (avatar.js) ---
+{
+  const a = defaultAvatar();
+  assert.ok(colorMapOf(a), 'default avatar produces a colour map');
+  const posed = pose(a, 'run', 0.25);
+  assert.ok(posed.parts.length > 0, 'posing yields drawable parts');
+  assert.notDeepEqual(pose(a, 'run', 0).parts[1], pose(a, 'run', 0.5).parts[1],
+    'the run cycle actually animates between phases');
+  assert.notDeepEqual(pose(a, 'run', 0).parts, pose(a, 'jump', 0).parts,
+    'jumping uses a different silhouette than running');
+
+  // storage round-trip must never yield a broken character
+  const dirty = { name: 'x'.repeat(50), head: 'nope', hair: null, visor: 1, suit: {}, skin: 99, hairColor: 'zzz' };
+  const clean = sanitize(dirty);
+  assert.ok(clean.name.length <= 10, 'name is clamped');
+  assert.ok(OPTIONS.head.includes(clean.head), 'bad head falls back to a valid one');
+  assert.ok(OPTIONS.skin.includes(clean.skin), 'bad skin falls back to a valid one');
+  assert.deepEqual(sanitize(sanitize(dirty)), clean, 'sanitize is idempotent');
+
+  const cycled = cycle(a, 'hair', 1);
+  assert.notEqual(cycled.hair, a.hair, 'cycling changes the option');
+  let back = cycle(cycled, 'hair', -1);
+  assert.equal(back.hair, a.hair, 'cycling back returns the original');
+}
+
+// --- DIVE: the depth contract (flats.js) ---
+// Each hazard must have a DIFFERENT correct answer, or the four are reskins of
+// one another. This asserts the right verb resolves it and a wrong verb fails.
+{
+  // the hitbox lives in flats.js now — resolveHazard owns it
+
+  // STATIC: dashing pierces it, jumping into it does not
+  {
+    const run = createRun(0);
+    const h = makeHazard('static', PLAYER_X - 1, 0, () => 0.5);
+    h.y = GROUND_Y - h.h;
+    assert.equal(resolveHazard(run, h), 'hit', 'walking into static hurts');
+    startDash(run);
+    assert.equal(resolveHazard(run, h), 'pierce', 'dashing pierces static');
+  }
+
+  // MONOLITH: solid even while dashing — must be pulsed
+  {
+    const run = createRun(0);
+    const h = makeHazard('monolith', PLAYER_X - 1, 0, () => 0.5);
+    h.y = GROUND_Y - h.h;
+    startDash(run);
+    assert.equal(resolveHazard(run, h), 'hit',
+      'dashing does NOT solve a monolith — this is what makes it distinct from static');
+    run.hazards = [h];
+    const shattered = startPulse(run);
+    assert.equal(shattered, 1, 'pulse shatters the monolith');
+    assert.equal(resolveHazard(run, h), 'none', 'shattered monolith is harmless');
+  }
+
+  // RIFT: only jumping clears it
+  {
+    const run = createRun(0);
+    const h = makeHazard('rift', PLAYER_X - 1, 0, () => 0.5);
+    assert.equal(resolveHazard(run, h), 'fall', 'running into a rift drops you');
+    startJump(run);
+    run.y = GROUND_Y - 30;
+    assert.equal(resolveHazard(run, h), 'none', 'jumping clears the rift');
+  }
+
+  // LURE: dashing resists the pull, otherwise it drags you
+  {
+    const run = createRun(0);
+    const h = makeHazard('lure', PLAYER_X - 1, 0, () => 0.5);
+    h.y = GROUND_Y - 20;
+    assert.equal(resolveHazard(run, h), 'pulled', 'the lure drags an unprotected diver');
+    startDash(run);
+    assert.equal(resolveHazard(run, h), 'resist', 'dashing breaks the pull');
+  }
+
+  // the answers table must stay in step with the behaviour above
+  assert.equal(ANSWER.static, 'dash');
+  assert.equal(ANSWER.monolith, 'pulse');
+  assert.equal(ANSWER.rift, 'jump');
+  assert.notEqual(ANSWER.static, ANSWER.monolith, 'static and monolith need different verbs');
+}
+
+// --- DIVE: the momentum economy ---
+{
+  const run = createRun(0);
+  const start = run.momentum;
+  addMomentum(run, 0.2);
+  assert.ok(run.momentum > start, 'good play builds momentum');
+  assert.ok(speedOf(run) > speedOf({ ...run, momentum: 0 }), 'momentum makes you faster');
+  assert.ok(voidTarget(run) < voidTarget({ ...run, momentum: 0 }),
+    'momentum pushes the void further back — momentum IS the safety margin');
+
+  addMomentum(run, 5);
+  assert.equal(run.momentum, 1, 'momentum is capped at 1');
+  addMomentum(run, -9);
+  assert.equal(run.momentum, 0, 'momentum floors at 0');
+
+  const idle = createRun(0);
+  const before = idle.momentum;
+  decayMomentum(idle, 1);
+  assert.ok(idle.momentum < before, 'momentum bleeds — standing still is never stable');
+
+  // resource rules
+  const r2 = createRun(0);
+  r2.focus = PULSE_COST - 1;
+  assert.equal(canPulse(r2), false, 'cannot pulse without focus');
+  r2.focus = MAX_FOCUS;
+  assert.ok(canPulse(r2), 'can pulse with focus');
+  assert.ok(startDash(r2), 'first dash works');
+  assert.equal(canDash(r2), false, 'dash respects its cooldown');
+  assert.ok(isInvulnerable(r2), 'dashing grants i-frames');
+
+  // a hit costs real momentum
+  const r3 = createRun(0);
+  addMomentum(r3, 0.5);
+  const pre = r3.momentum;
+  takeHit(r3);
+  assert.ok(r3.momentum < pre - 0.2, 'taking a hit costs serious momentum');
+
+  // variable jump height
+  const r4 = createRun(0);
+  startJump(r4);
+  const full = r4.vy;
+  const r5 = createRun(0);
+  startJump(r5); cutJump(r5);
+  assert.ok(r5.vy > full, 'releasing early clips the jump — height is controllable');
+  assert.equal(startJump(r5), false, 'cannot double jump');
+}
+
+console.log('all runner / stax / pulse / dive checks passed');
